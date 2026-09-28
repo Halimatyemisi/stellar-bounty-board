@@ -1238,7 +1238,7 @@ app.delete(
 
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   if ((err as any).type === 'entity.too.large') {
-    res.status(413).json({ error: 'Payload Too Large' });
+    res.status(413).json({ error: 'Payload too large', maxBytes: 32768 });
     return;
   }
   if (err instanceof SyntaxError && (err as any).type === 'entity.parse.failed' && (err as any).body) {

@@ -19,7 +19,7 @@ export function enforceBodyLimit(limit: string) {
   return (req: Request, res: Response, next: NextFunction) => {
     const contentLength = parseInt(req.headers['content-length'] ?? '0', 10);
     if (contentLength > maxBytes) {
-      res.status(413).json({ error: 'Payload Too Large' });
+      res.status(413).json({ error: 'Payload too large', maxBytes });
       return;
     }
     next();

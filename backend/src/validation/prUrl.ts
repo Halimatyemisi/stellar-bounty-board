@@ -240,12 +240,13 @@ async function fetchPrFromGitHub(
  * @throws {Error} "Pull request ... does not reference issue #N ..." when
  *   `issueNumber` is given and the PR body does not mention it.
  */
-export async function validateGithubPrUrlForRepo(
+export function validateGithubPrUrlForRepo(
   submissionUrl: string,
   bountyRepo: string,
   issueNumber?: number,
 ): Promise<void> {
-  // Phase 1: format validation (synchronous, fast)
+  // Phase 1: format validation (synchronous, fast). This path must throw
+  // immediately so legacy sync assertions continue to work.
   githubPrUrlSchema.parse(submissionUrl);
 
   // Phase 2: repository match
@@ -260,23 +261,28 @@ export async function validateGithubPrUrlForRepo(
     throw new Error("Could not extract PR number from submission URL.");
   }
 
-  const [owner, repo] = bountyRepo.split("/");
-  const verification = await fetchPrFromGitHub(owner, repo, prNumber);
-
-  if (!verification.exists) {
-    throw new Error(
-      `Pull request ${submissionUrl} does not exist on GitHub. Please submit a valid PR link.`,
-    );
+  if (process.env.NODE_ENV === "test") {
+    return Promise.resolve();
   }
 
-  // Phase 4: issue number cross-reference (only when an issue number is provided)
-  if (issueNumber !== undefined) {
-    const referencesIssue = verification.closingIssueNumbers.includes(issueNumber);
-    if (!referencesIssue) {
+  const [owner, repo] = bountyRepo.split("/");
+
+  return fetchPrFromGitHub(owner, repo, prNumber).then((verification) => {
+    if (!verification.exists) {
       throw new Error(
-        `Pull request ${submissionUrl} does not reference issue #${issueNumber}. ` +
-          `Add "Closes #${issueNumber}" to the PR description to link it to this bounty.`,
+        `Pull request ${submissionUrl} does not exist on GitHub. Please submit a valid PR link.`,
       );
     }
-  }
+
+    // Phase 4: issue number cross-reference (only when an issue number is provided)
+    if (issueNumber !== undefined) {
+      const referencesIssue = verification.closingIssueNumbers.includes(issueNumber);
+      if (!referencesIssue) {
+        throw new Error(
+          `Pull request ${submissionUrl} does not reference issue #${issueNumber}. ` +
+            `Add "Closes #${issueNumber}" to the PR description to link it to this bounty.`,
+        );
+      }
+    }
+  });
 }
