@@ -960,6 +960,7 @@ impl StellarBountyBoardContract {
     pub fn cancel_bounty(env: Env, bounty_id: u64, maintainer: Address) {
         maintainer.require_auth();
         let mut bounty = read_bounty(&env, bounty_id);
+        expire_if_needed(&env, &mut bounty);
 
         if bounty.maintainer != maintainer {
             panic_error(ContractError::MaintainerMismatch);

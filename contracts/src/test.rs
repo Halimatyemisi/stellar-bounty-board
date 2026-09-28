@@ -116,6 +116,7 @@ fn create_bounty_with_state(
     contributor: Address,
     token_id: Address,
     status: BountyStatus,
+    arbiter: Address,
 ) -> u64 {
     let deadline = env.ledger().timestamp() + 1000;
     let bounty_id = client.create_bounty(
@@ -160,8 +161,7 @@ fn create_bounty_with_state(
         BountyStatus::Disputed => {
             client.reserve_bounty(&bounty_id, &contributor);
             client.submit_bounty(&bounty_id, &contributor);
-            // This helper doesn't put it in disputed state directly,
-            // but we can manually do it if needed in specific tests.
+            client.dispute_bounty(&bounty_id, &arbiter);
             bounty_id
         }
     }
@@ -174,7 +174,7 @@ macro_rules! invalid_transition_test {
         fn $name() {
             let env = Env::default();
             env.mock_all_auths();
-            let (client, _admin, maintainer, contributor, token_id, _, _) = setup_test(&env);
+            let (client, _admin, maintainer, contributor, token_id, _, arbiter) = setup_test(&env);
             let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
             token_admin.mint(&maintainer, &1000);
 
@@ -185,6 +185,7 @@ macro_rules! invalid_transition_test {
                 contributor.clone(),
                 token_id.clone(),
                 $status,
+                arbiter,
             );
             let action = $action;
             action(&client, bounty_id, maintainer, contributor);
@@ -788,27 +789,42 @@ fn test_cancel_bounty_wrong_maintainer() {
     client.cancel_bounty(&bounty_id, &other_maintainer);
 }
 
-#[test]
-#[should_panic(expected = "BountyNotOpen")]
-fn test_cancel_bounty_non_open_reserved() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (client, maintainer, contributor, token_id, _, _) = setup_test(&env);
-    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
-    token_admin.mint(&maintainer, &1000);
-
-    let bounty_id = create_bounty_with_state(
-        &env,
-        &client,
-        maintainer.clone(),
-        contributor.clone(),
-        token_id.clone(),
-        BountyStatus::Reserved,
-    );
-
-    client.cancel_bounty(&bounty_id, &maintainer);
-}
+invalid_transition_test!(cancel_reserved, BountyStatus::Reserved, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>,
+     bounty_id: u64,
+     maintainer: Address,
+     _contributor: Address| { client.cancel_bounty(&bounty_id, &maintainer) }
+});
+invalid_transition_test!(cancel_submitted, BountyStatus::Submitted, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>,
+     bounty_id: u64,
+     maintainer: Address,
+     _contributor: Address| { client.cancel_bounty(&bounty_id, &maintainer) }
+});
+invalid_transition_test!(cancel_released, BountyStatus::Released, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>,
+     bounty_id: u64,
+     maintainer: Address,
+     _contributor: Address| { client.cancel_bounty(&bounty_id, &maintainer) }
+});
+invalid_transition_test!(cancel_refunded, BountyStatus::Refunded, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>,
+     bounty_id: u64,
+     maintainer: Address,
+     _contributor: Address| { client.cancel_bounty(&bounty_id, &maintainer) }
+});
+invalid_transition_test!(cancel_expired, BountyStatus::Expired, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>,
+     bounty_id: u64,
+     maintainer: Address,
+     _contributor: Address| { client.cancel_bounty(&bounty_id, &maintainer) }
+});
+invalid_transition_test!(cancel_disputed, BountyStatus::Disputed, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>,
+     bounty_id: u64,
+     maintainer: Address,
+     _contributor: Address| { client.cancel_bounty(&bounty_id, &maintainer) }
+});
 
 invalid_transition_test!(reserve_reserved, BountyStatus::Reserved, "BountyNotOpen", {
     |client: &StellarBountyBoardContractClient<'static>,
@@ -840,6 +856,12 @@ invalid_transition_test!(reserve_refunded, BountyStatus::Refunded, "BountyNotOpe
      contributor: Address| { client.reserve_bounty(&bounty_id, &contributor) }
 });
 invalid_transition_test!(reserve_expired, BountyStatus::Expired, "BountyNotOpen", {
+    |client: &StellarBountyBoardContractClient<'static>,
+     bounty_id: u64,
+     _maintainer: Address,
+     contributor: Address| { client.reserve_bounty(&bounty_id, &contributor) }
+});
+invalid_transition_test!(reserve_disputed, BountyStatus::Disputed, "BountyNotOpen", {
     |client: &StellarBountyBoardContractClient<'static>,
      bounty_id: u64,
      _maintainer: Address,
@@ -888,6 +910,17 @@ invalid_transition_test!(
 invalid_transition_test!(
     submit_expired,
     BountyStatus::Expired,
+    "BountyMustBeReserved",
+    {
+        |client: &StellarBountyBoardContractClient<'static>,
+         bounty_id: u64,
+         _maintainer: Address,
+         contributor: Address| { client.submit_bounty(&bounty_id, &contributor) }
+    }
+);
+invalid_transition_test!(
+    submit_disputed,
+    BountyStatus::Disputed,
     "BountyMustBeReserved",
     {
         |client: &StellarBountyBoardContractClient<'static>,
@@ -947,6 +980,17 @@ invalid_transition_test!(
          _contributor: Address| { client.release_bounty(&bounty_id, &maintainer) }
     }
 );
+invalid_transition_test!(
+    release_disputed,
+    BountyStatus::Disputed,
+    "BountyMustBeSubmitted",
+    {
+        |client: &StellarBountyBoardContractClient<'static>,
+         bounty_id: u64,
+         maintainer: Address,
+         _contributor: Address| { client.release_bounty(&bounty_id, &maintainer) }
+    }
+);
 
 invalid_transition_test!(refund_open, BountyStatus::Open, "BountyNotExpiredYet", {
     |client: &StellarBountyBoardContractClient<'static>,
@@ -991,6 +1035,17 @@ invalid_transition_test!(
     refund_refunded,
     BountyStatus::Refunded,
     "BountyAlreadyFinalized",
+    {
+        |client: &StellarBountyBoardContractClient<'static>,
+         bounty_id: u64,
+         maintainer: Address,
+         _contributor: Address| { client.refund_bounty(&bounty_id, &maintainer) }
+    }
+);
+invalid_transition_test!(
+    refund_disputed,
+    BountyStatus::Disputed,
+    "BountyNotExpiredYet",
     {
         |client: &StellarBountyBoardContractClient<'static>,
          bounty_id: u64,
