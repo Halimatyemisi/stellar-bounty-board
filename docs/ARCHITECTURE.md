@@ -2,6 +2,44 @@
 
 This document describes the system architecture of Stellar Bounty Board, including component relationships and the bounty lifecycle flow.
 
+## Table of contents
+
+- [System Overview](#system-overview)
+- [Component Breakdown](#component-breakdown)
+  - [Frontend (`frontend/`)](#frontend-frontend)
+  - [Backend (`backend/`)](#backend-backend)
+  - [Smart Contract (`contracts/`)](#smart-contract-contracts)
+- [Bounty Lifecycle](#bounty-lifecycle)
+  - [Bounty Lifecycle Sequence](#bounty-lifecycle-sequence)
+  - [BountyStatus State Machine (Mermaid)](#bountystatus-state-machine-mermaid)
+- [Interaction Sequence Diagrams](#interaction-sequence-diagrams)
+  - [0. Maintainer-Raised Dispute Flow](#0-maintainer-raised-dispute-flow)
+  - [Maintainer Wallet Unreachability & Contributor Dispute Escalation](#maintainer-wallet-unreachability--contributor-dispute-escalation)
+  - [1. Create Bounty](#1-create-bounty)
+  - [2. Reserve Bounty](#2-reserve-bounty)
+  - [3. Submit Work](#3-submit-work)
+  - [4. Release Payout](#4-release-payout)
+  - [5. Refund (Cancelled Bounty)](#5-refund-cancelled-bounty)
+  - [Worked Example: One Bounty, End to End](#worked-example-one-bounty-end-to-end)
+- [Data Flow](#data-flow)
+- [On-Chain vs Off-Chain Data Ownership](#on-chain-vs-off-chain-data-ownership)
+  - [Data Field Mapping](#data-field-mapping)
+  - [State Transition Authority](#state-transition-authority)
+  - [Migration Path Notes](#migration-path-notes)
+- [Deployment Architecture](#deployment-architecture)
+- [Directory Structure](#directory-structure)
+
+## See also
+
+- [Architecture diagram](ARCHITECTURE_DIAGRAM.md)
+- [Architecture decision records](adr/)
+- [Deployment guide](deployment.md)
+- [API authentication](api-authentication.md)
+- [Webhook signatures](webhook-signatures.md)
+- [GraphQL API reference](GRAPHQL_API_REFERENCE.md)
+- [FAQ](FAQ.md) and [Maintainers](MAINTAINERS.md)
+- [Contributing](../CONTRIBUTING.md), [Onboarding](../ONBOARDING.md) and [Security](../SECURITY.md)
+
 ## System Overview
 
 ```
@@ -323,6 +361,71 @@ sequenceDiagram
     Frontend-->>Contributor: Final status displayed
 ```
 
+
+### Maintainer Wallet Unreachability & Contributor Dispute Escalation
+
+#### Problem Overview
+
+In standard lifecycle operation, the maintainer is responsible for reviewing submissions and calling `release_bounty` (which requires `maintainer.require_auth()`) or `refund_bounty`. However, real-world failure modes include:
+1. **Wallet Key Compromise or Loss**: The maintainer loses access to their Stellar secret key or hardware wallet.
+2. **Project Abandonment / Unresponsiveness**: The maintainer stops reviewing submissions without officially closing the repository or bounty.
+3. **Personnel Turnover**: The original maintainer leaves an organization before signing release transactions.
+
+Under these conditions, a contributor who has fulfilled all acceptance criteria risks having their submission and escrowed funds permanently locked in `BountyStatus::Submitted` without recourse.
+
+#### Contract-Level Reality vs Off-Chain Flow
+
+In the Soroban smart contract (`contracts/src/lib.rs`):
+- `release_bounty`: Strictly mandates `maintainer.require_auth()`. A lost maintainer key makes calling `release_bounty` impossible.
+- `dispute_bounty`: Specifically authorizes `contributor.require_auth()` for bounties in `BountyStatus::Submitted` prior to `bounty.deadline`.
+- `resolve_dispute`: Authorized exclusively by the designated `arbiter`. The arbiter can rule with `release = true` (releasing funds to the contributor) or `release = false` (refunding to the maintainer address).
+
+#### Sequence Flow: Contributor-Initiated Dispute After Inaction Timeout
+
+When a submission sits unreviewed past the designated review timeout window (defaulting to 14 days), the contributor is entitled to escalate directly to the on-chain Arbiter:
+
+```mermaid
+sequenceDiagram
+    actor Contributor
+    actor Maintainer (Unresponsive / Lost Key)
+    actor Arbiter
+    participant Frontend
+    participant Backend
+    participant Contract (Soroban)
+
+    Contributor->>Contract: submit_bounty(bounty_id, contributor)
+    Contract-->>Backend: Status: Submitted (dispute timer begins)
+    Note over Contributor,Maintainer: Maintainer wallet is unresponsive or unreachable
+
+    rect rgb(240, 240, 240)
+        Note over Contributor,Arbiter: Review Window Expires (e.g. 14 Days)
+        Contributor->>Frontend: Trigger "Escalate to Arbiter (Maintainer Unresponsive)"
+        Frontend->>Contract: dispute_bounty(bounty_id, arbiter) [contributor auth]
+        Contract-->>Contract: status = Disputed, dispute_raised_at = now
+    end
+
+    Contract-->>Arbiter: Event: BountyDisputed(bounty_id, contributor, arbiter)
+    Arbiter->>Backend: Inspects PR proof-of-work & Git commit verification
+    
+    alt Work verified & passes criteria
+        Arbiter->>Contract: resolve_dispute(bounty_id, release: true)
+        Contract-->>Contributor: Escrowed funds transferred to Contributor
+        Contract-->>Contract: status = Released
+    else Work incomplete or non-functional
+        Arbiter->>Contract: resolve_dispute(bounty_id, release: false)
+        Contract-->>Maintainer: Escrowed funds returned to Maintainer address
+        Contract-->>Contract: status = Refunded
+    end
+```
+
+#### Architecture Decision: Contributor-Initiated Dispute Policy
+
+1. **Decision**: Contributor-initiated dispute escalation after an unactioned review timeout is **officially adopted and required** as part of the system lifecycle.
+2. **Timeout Window**: A submission must sit in `BountyStatus::Submitted` without maintainer action for at least `SUBMISSION_INACTION_TIMEOUT` (14 days) before contributor dispute escalation is unlocked on the frontend/API.
+3. **Arbiter Jurisdiction**: The Arbiter acts as the ultimate fail-safe fiduciary. Even if the maintainer never recovers their wallet, the Arbiter's independent signature via `resolve_dispute` guarantees that contributors who deliver working code are paid out from on-chain escrow.
+4. **Deadline Expiration Boundary**: If a bounty reaches its deadline before submission or dispute, it transitions to `BountyStatus::Expired` where only refunds can be processed. Contributors are advised to submit well ahead of deadline boundaries.
+
+
 ### 1. Create Bounty
 
 ```mermaid
@@ -420,6 +523,57 @@ sequenceDiagram
     deactivate Backend
     Frontend-->>Maintainer: Show "Refunded"<br/>Escrow returned ✓
 ```
+
+### Worked Example: One Bounty, End to End
+
+This walks a single bounty through the happy path (`OPEN → RESERVED → SUBMITTED → RELEASED`)
+using the endpoints from the diagrams above. Addresses, IDs and the PR URL are illustrative.
+
+**1. Maintainer creates the bounty** — `POST /api/bounties`
+
+```json
+{ "title": "Fix pagination on /bounties", "amount": 100, "token": "XLM" }
+```
+
+Response `201`: `{ "data": { "id": "b-42", "status": "OPEN", ... } }`.
+The record is written to `bounties.json` and shows up in the open list.
+
+**2. Contributor reserves it** — `POST /api/bounties/b-42/reserve`
+
+```json
+{ "contributor": "GCONTRIBUTOR..." }
+```
+
+The backend checks the bounty is `OPEN`, then stores the contributor and moves it to
+`RESERVED`. No one else can reserve it while it is held.
+
+**3. Contributor submits work** — `POST /api/bounties/b-42/submit`
+
+```json
+{ "submissionUrl": "https://github.com/org/repo/pull/123" }
+```
+
+The backend checks the bounty is `RESERVED`, stores the URL, and moves it to `SUBMITTED`.
+
+**4. Maintainer releases the payout** — `POST /api/bounties/b-42/release`
+
+```json
+{ "maintainer": "GMAINTAINER..." }
+```
+
+The backend checks the bounty is `SUBMITTED`, sets `RELEASED` and records the release
+timestamp. This is a terminal state.
+
+| Step | Endpoint | Precondition | Resulting status |
+|------|----------|--------------|------------------|
+| 1 | `POST /api/bounties` | — | `OPEN` |
+| 2 | `POST /api/bounties/:id/reserve` | `OPEN` | `RESERVED` |
+| 3 | `POST /api/bounties/:id/submit` | `RESERVED` | `SUBMITTED` |
+| 4 | `POST /api/bounties/:id/release` | `SUBMITTED` | `RELEASED` |
+
+Calling a step out of order (for example releasing an `OPEN` bounty) is rejected because the
+precondition status check fails. If the maintainer cancels before submission, they call
+`POST /api/bounties/:id/refund` instead, which moves an `OPEN` or `RESERVED` bounty to `REFUNDED`.
 
 ## Data Flow
 
@@ -602,3 +756,9 @@ stellar-bounty-board/
 ├── ONBOARDING.md
 └── package.json                # Root workspace scripts
 ```
+
+---
+
+## Contributing
+
+This document describes system design only and intentionally carries no contribution steps. The canonical contribution process is [CONTRIBUTING.md](../CONTRIBUTING.md); the per-wave "How to Contribute" sections (for example [wave-4](wave-4.md)) follow the same flow: comment on an issue to claim it, fork, branch, and open a PR with `Closes #<issue>`.

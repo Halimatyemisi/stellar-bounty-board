@@ -1,5 +1,28 @@
 # Security Policy
 
+
+## Table of Contents
+
+- [Content Security Policy (CSP)](#content-security-policy-csp)
+  - [Current policy](#current-policy)
+  - [Report-only mode](#report-only-mode)
+  - [Updating the policy](#updating-the-policy)
+  - [Worked Example: Verifying CSP Report-Only Mode Locally](#worked-example-verifying-csp-report-only-mode-locally)
+- [Supported Versions](#supported-versions)
+- [Reporting a Vulnerability](#reporting-a-vulnerability)
+- [Responsible Disclosure Timeline](#responsible-disclosure-timeline)
+- [Our Commitments](#our-commitments)
+- [Credits](#credits)
+- [Logging best practices](#logging-best-practices)
+- [Authentication Architecture](#authentication-architecture)
+- [Contract Security Review: Arbiter Trust Assumptions](#contract-security-review-arbiter-trust-assumptions)
+- [Automated Security Analysis](#automated-security-analysis)
+- [Scope](#scope)
+- [See Also / Related Documentation](#see-also--related-documentation)
+
+---
+
+
 ## Content Security Policy (CSP)
 
 The frontend build injects a `Content-Security-Policy-Report-Only` meta tag via `frontend/vite.config.ts`.
@@ -29,6 +52,41 @@ Once no violations are observed in staging, the meta tag should be upgraded to
 
 Edit the `cspDirectives` array in `frontend/vite.config.ts` → `cspPlugin()`.
 After any change, verify there are no new console violations before promoting to production.
+
+### Worked Example: Verifying CSP Report-Only Mode Locally
+
+Before deploying changes to `cspDirectives` in `frontend/vite.config.ts`, verify that violations are captured in report-only mode without blocking resources.
+
+1. **Start the frontend application:**
+   ```bash
+   cd frontend
+   npm run dev
+   ```
+   *Expected output:*
+   ```text
+     VITE v5.4.2  ready in 320 ms
+
+     ➜  Local:   http://localhost:5173/
+     ➜  Network: use --host to expose
+   ```
+
+2. **Inspect the rendered meta tag using curl:**
+   ```bash
+   curl -s http://localhost:5173/ | grep -i "content-security-policy"
+   ```
+   *Expected output:*
+   ```html
+   <meta http-equiv="Content-Security-Policy-Report-Only" content="default-src 'self'; connect-src 'self' https://rpc-futurenet.stellar.org https://api.github.com; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';">
+   ```
+
+3. **Verify console behavior:**
+   - Open Chrome DevTools (`F12`) -> Navigate to **Console**.
+   - If an unauthorized script/image is evaluated, the browser outputs:
+     ```text
+     [Report Only] Refused to load the script 'https://untrusted-cdn.example.com/analytics.js' because it violates the following Content Security Policy directive: "script-src 'self'".
+     ```
+   - Notice that the script is flagged for audit without breaking the user experience.
+
 
 ---
 
@@ -158,9 +216,9 @@ The Stellar Bounty Board contract (`contracts/src/lib.rs`) currently places **si
 
 3. **No Time Constraints on Resolution**: While there is a dispute window that must pass before resolution, once the window expires, the arbiter can resolve at any time without additional constraints.
 
-4. **Single Point of Control**: The arbiter address is set once during contract initialization and cannot be changed without redeploying the entire contract.
+4. **Timelocked Rotation**: The arbiter address is rotatable through `set_arbiter` / `confirm_arbiter`, which require the admin's authorization and a two-day timelock, so a rotation cannot be smuggled through unnoticed.
 
-5. **No Oversight Mechanisms**: There are no committee voting, multi-signature requirements, or slashing/bonding mechanisms to constrain arbiter behavior.
+5. **Bonded Arbiter, No Committee**: There is no committee voting and no multi-signature requirement. Since the arbiter-bond change, the role is bonded instead: a candidate must post at least `MinArbiterStake` in a single token via `bond_arbiter_stake` before `set_arbiter` will accept them, the tokens are escrowed in the contract, and the admin can forfeit part of the bond to the treasury with `slash_arbiter` when a ruling was bad. A bond gives a bad ruling a price and caps the damage an arbiter can do; it does not add a second level of review, so the ruling itself remains final.
 
 ### Failure Modes
 
@@ -372,5 +430,16 @@ The following are **out of scope**:
 - Issues in forks or unofficial deployments
 
 ---
+
+
+---
+
+## See Also / Related Documentation
+
+- [SECURITY_CHECKLIST.md](./SECURITY_CHECKLIST.md) — Pre-PR security verification checklist covering input validation, auth, and secret rotation.
+- [WEBHOOK_SECURITY_GUIDE.md](./WEBHOOK_SECURITY_GUIDE.md) — Detailed guide on GitHub webhook HMAC-SHA256 signature verification.
+- [WEBHOOK_SECRET_VALIDATION.md](./WEBHOOK_SECRET_VALIDATION.md) — Server startup validation and enforcement of webhook secrets.
+- [RUNBOOK.md](./RUNBOOK.md) — Operational runbooks including incident response procedures for compromised arbiter keys.
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — Contribution guidelines and development workflow.
 
 _Last updated: 2026-05-28_

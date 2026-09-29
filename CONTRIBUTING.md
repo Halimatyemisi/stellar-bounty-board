@@ -2,6 +2,37 @@
 
 This project is intentionally scoped as an MVP with obvious upgrade paths.
 
+
+## Table of Contents
+
+- [Run locally](#run-locally)
+- [Conventional Commits](#conventional-commits)
+  - [Commit Format](#commit-format)
+  - [Commit Types](#commit-types)
+  - [Examples](#examples)
+- [Pull Request Checklist](#pull-request-checklist)
+  - [Complete Worked Example: From Branch Creation to Verified Pull Request](#complete-worked-example-from-branch-creation-to-verified-pull-request)
+- [Testing](#testing)
+  - [Running Tests](#running-tests)
+  - [Rate Limiting in Test Environment](#rate-limiting-in-test-environment)
+  - [Test Types](#test-types)
+  - [Writing Test Fixtures](#writing-test-fixtures)
+  - [Test Patterns](#test-patterns)
+  - [Testing expected failures](#testing-expected-failures)
+  - [Running the contract test suite](#running-the-contract-test-suite)
+- [Pre-Commit Hooks](#pre-commit-hooks)
+  - [What Gets Checked](#what-gets-checked)
+  - [Setup](#setup)
+  - [Platform-Specific Setup](#platform-specific-setup)
+  - [Bypassing Hooks (Not Recommended)](#bypassing-hooks-not-recommended)
+  - [Troubleshooting](#troubleshooting)
+  - [Configuration Files](#configuration-files)
+- [Getting Help](#getting-help)
+- [See Also / Related Documentation](#see-also--related-documentation)
+
+---
+
+
 ## Run locally
 
 1. Clone the repo and install dependencies:
@@ -135,6 +166,55 @@ Before submitting a PR, verify:
   - What changed and why
   - How to test/verify the change
   - Link to related issue(s): `Closes #<issue-number>`
+
+### Complete Worked Example: From Branch Creation to Verified Pull Request
+
+Here is a step-by-step worked session showing how a contributor picks up an issue, verifies tests locally, and creates a compliant Conventional Commit:
+
+1. **Create and switch to a topic branch:**
+   ```bash
+   git checkout main
+   git pull origin main
+   git checkout -b fix/issue-42-reject-negative-bounty
+   ```
+   *Expected output:*
+   ```text
+   Switched to a new branch 'fix/issue-42-reject-negative-bounty'
+   ```
+
+2. **Run test suite before making changes:**
+   ```bash
+   npm test
+   ```
+   *Expected output:*
+   ```text
+   Test Files  18 passed (18)
+   Tests       142 passed (142)
+   ```
+
+3. **Stage modifications and run pre-commit checks:**
+   ```bash
+   git add backend/src/controllers/bounties.ts backend/test/bounties.test.ts
+   git commit -m "fix(backend): reject negative bounty amounts (#42)"
+   ```
+   *Expected output from Husky / lint-staged:*
+   ```text
+   ✔ Preparing lint-staged...
+   ✔ Running tasks for staged files...
+     ❯ Running type-check...
+     ❯ Running eslint --fix...
+     ❯ Running prettier --write...
+   ✔ Applying modifications...
+   ✔ Cleaning up temporary files...
+   [fix/issue-42-reject-negative-bounty a1b2c3d] fix(backend): reject negative bounty amounts (#42)
+    2 files changed, 14 insertions(+), 2 deletions(-)
+   ```
+
+4. **Push branch and open Pull Request:**
+   ```bash
+   git push origin fix/issue-42-reject-negative-bounty
+   ```
+
 
 ## Testing
 
@@ -562,5 +642,16 @@ chmod +x .husky/pre-commit
 - **Can't figure something out?** Open a Discussion or comment on the issue you're working on
 
 We value quality contributions and clear communication. If this guide is missing something, a PR improving it is one of the most valuable contributions you can make.
+
+
+## See Also / Related Documentation
+
+- [SECURITY.md](./SECURITY.md) — Security policies, vulnerability disclosure, and arbiter assumptions.
+- [SECURITY_CHECKLIST.md](./SECURITY_CHECKLIST.md) — Security checklist for pull request reviews.
+- [WEBHOOK_SECURITY_GUIDE.md](./WEBHOOK_SECURITY_GUIDE.md) — GitHub webhook HMAC signature verification guide.
+- [WEBHOOK_SECRET_VALIDATION.md](./WEBHOOK_SECRET_VALIDATION.md) — Server startup secret enforcement documentation.
+- [IMPLEMENTATION_SUMMARY.md](./IMPLEMENTATION_SUMMARY.md) — Architectural summaries and testing procedures.
+- [CODE_EXAMPLES.md](./CODE_EXAMPLES.md) — Code reference and end-to-end usage examples.
+
 
 Happy coding! 🚀

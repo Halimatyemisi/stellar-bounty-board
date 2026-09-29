@@ -119,15 +119,217 @@ Base URL:
 
 Routes:
 
-- `GET /api/health`
-- `GET /api/health/deep` — dependency-aware readiness check (returns 503 if any component is down)
-- `GET /api/bounties`
-- `POST /api/bounties`
-- `POST /api/bounties/:id/reserve`
-- `POST /api/bounties/:id/submit`
-- `POST /api/bounties/:id/release`
+- `GET /api/health` — liveness check
+  - **Request**: No request body or query parameters required.
+  - **Response 200 OK**:
+    ```json
+    {
+      "service": "stellar-bounty-board-api",
+      "status": "ok",
+      "timestamp": "2026-09-27T15:30:00.000Z"
+    }
+    ```
+  - **Error Responses**: Rate limit exceeded returns HTTP `429 Too Many Requests` (via global rate limiter).
+- `GET /api/health/deep` — dependency-aware readiness check
+  - **Request**: No request body or query parameters required.
+  - **Response 200 OK** (all components healthy):
+    ```json
+    {
+      "overall": "up",
+      "components": {
+        "store": "up",
+        "soroban": "up",
+        "contract": "up",
+        "auth": "up"
+      },
+      "timestamp": "2026-09-28T01:00:00.000Z"
+    }
+    ```
+  - **Response 503 Service Unavailable** (one or more components degraded):
+    ```json
+    {
+      "overall": "down",
+      "components": {
+        "store": "down",
+        "soroban": "up",
+        "contract": "up",
+        "auth": "up"
+      },
+      "timestamp": "2026-09-28T01:00:00.000Z"
+    }
+    ```
+  - **Error Responses**:
+    - `429 Too Many Requests` — rate limit exceeded.
+- `GET /api/bounties` — list and filter bounties
+  - **Query Parameters**:
+    - `q` (optional): Free-text search keyword.
+    - `contributor` (optional): Filter by contributor Stellar public key.
+    - `maintainer` (optional): Filter by maintainer Stellar public key.
+    - `status` (optional): Filter by status (`open`, `reserved`, `submitted`, `released`, `refunded`, `disputed`).
+    - `tokenSymbol` (optional): Filter by token symbol (e.g. `USDC`, `XLM`).
+    - `sort` (optional): Sort field (`amount`, `deadline`, `createdAt`, `status`). Default: `createdAt`.
+    - `order` (optional): Sort direction (`asc`, `desc`). Default: `desc`.
+    - `page` (optional): Page number (min: 1). Default: 1.
+    - `pageSize` (optional): Items per page (1-100). Default: 20.
+    - `deadlineBefore` / `deadlineAfter` (optional): ISO 8601 date strings.
+  - **Response 200 OK**:
+    ```json
+    {
+      "data": [
+        {
+          "id": 1,
+          "title": "Build integration tests",
+          "amount": "1000000000",
+          "token": "C...",
+          "status": "open",
+          "maintainer": "G...",
+          "contributor": null,
+          "deadline": 1750000000,
+          "createdAt": 1740000000
+        }
+      ],
+      "total": 1,
+      "page": 1,
+      "pageSize": 20,
+      "hasMore": false
+    }
+    ```
+  - **Error Responses**:
+    - `400 Bad Request` — invalid query parameters, invalid date strings, or invalid Stellar public keys.
+    - `304 Not Modified` — returned when `If-None-Match` header matches resource ETag.
+    - `429 Too Many Requests` — rate limit exceeded.
+- `POST /api/bounties` — create and fund a new bounty
+  - **Request Body**:
+    ```json
+    {
+      "repo": "owner/repo",
+      "issueNumber": 42,
+      "title": "Fix login redirect bug",
+      "description": "Detailed task description",
+      "amount": "1000000000",
+      "token": "C...",
+      "deadline": 1750000000,
+      "maintainer": "G...",
+      "template": "standard"
+    }
+    ```
+  - **Response 201 Created**:
+    ```json
+    {
+      "data": {
+        "id": 1,
+        "title": "Fix login redirect bug",
+        "description": "Detailed task description",
+        "amount": "1000000000",
+        "token": "C...",
+        "status": "open",
+        "maintainer": "G...",
+        "contributor": null,
+        "deadline": 1750000000,
+        "createdAt": 1740000000
+      }
+    }
+    ```
+  - **Error Responses**:
+    - `400 Bad Request` — invalid request payload (`INVALID_BODY`) or invalid amount.
+    - `401 Unauthorized` — missing or invalid Stellar signature authorization header.
+    - `429 Too Many Requests` — rate limit exceeded.
+- `POST /api/bounties/:id/reserve` — reserve an open bounty
+  - **Request Body**:
+    ```json
+    {
+      "contributor": "G...",
+      "expectedVersion": 1
+    }
+    ```
+  - **Response 200 OK**:
+    ```json
+    {
+      "data": {
+        "id": 1,
+        "status": "reserved",
+        "contributor": "G...",
+        "reservedAt": "2026-09-27T16:00:00.000Z",
+        "version": 2
+      }
+    }
+    ```
+  - **Error Responses**:
+    - `400 Bad Request` — invalid request payload (`INVALID_BODY`).
+    - `404 Not Found` — bounty ID not found (`BOUNTY_NOT_FOUND`).
+    - `409 Conflict` — bounty is already reserved/released, or version mismatch.
+    - `429 Too Many Requests` — rate limit exceeded.
+- `POST /api/bounties/:id/submit` — submit work for a reserved bounty
+  - **Request Body**:
+    ```json
+    {
+      "contributor": "G...",
+      "submissionUrl": "https://github.com/owner/repo/pull/123",
+      "notes": "Optional notes on implementation"
+    }
+    ```
+  - **Response 200 OK**:
+    ```json
+    {
+      "data": {
+        "id": 1,
+        "status": "submitted",
+        "contributor": "G...",
+        "submissionUrl": "https://github.com/owner/repo/pull/123",
+        "notes": "Optional notes on implementation"
+      }
+    }
+    ```
+  - **Error Responses**:
+    - `400 Bad Request` — invalid request payload or validation failure (`INVALID_BODY`).
+    - `404 Not Found` — bounty ID not found (`BOUNTY_NOT_FOUND`).
+    - `409 Conflict` — bounty is not in reserved state or contributor mismatch.
+    - `429 Too Many Requests` — rate limit exceeded.
+- `POST /api/bounties/:id/release` — release escrowed payout to contributor
+  - **Request Body**:
+    ```json
+    {
+      "maintainer": "G...",
+      "transactionHash": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+    ```
+  - **Response 200 OK**:
+    ```json
+    {
+      "data": {
+        "id": 1,
+        "status": "released",
+        "maintainer": "G...",
+        "releasedAt": "2026-09-27T15:35:00.000Z"
+      }
+    }
+    ```
+  - **Error Responses**:
+    - `400 Bad Request` — invalid request payload (`INVALID_BODY`).
+    - `401 Unauthorized` — missing or invalid Stellar signature headers.
+    - `404 Not Found` — bounty ID not found (`BOUNTY_NOT_FOUND`).
+    - `409 Conflict` — bounty is not in submitted state or maintainer mismatch.
+    - `429 Too Many Requests` — rate limit exceeded.
 - `POST /api/bounties/:id/refund`
-- `GET /api/open-issues`
+- `GET /api/open-issues` — fetch available candidate GitHub issues for bounties
+  - **Request**: No request body or query parameters required.
+  - **Response 200 OK**: Cached for 10 minutes (`Cache-Control: max-age=600`).
+    ```json
+    {
+      "data": [
+        {
+          "id": "GH-42",
+          "title": "Fix login redirect bug",
+          "labels": ["bug", "good first issue"],
+          "summary": "First paragraph summary of the GitHub issue body.",
+          "impact": "starter"
+        }
+      ]
+    }
+    ```
+  - **Error Responses**:
+    - `502 Bad Gateway` — upstream GitHub API unreachable or returned failure.
+    - `429 Too Many Requests` — rate limit exceeded.
 
 ## Run Locally
 
